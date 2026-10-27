@@ -1,4 +1,4 @@
-const C = 'butce-v1';
+const C = 'butce-v2';
 const ASSETS = ['./', 'index.html', 'manifest.webmanifest', 'icon-180.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -13,7 +13,7 @@ self.addEventListener('activate', e => {
 
 // Ağ öncelikli: internet varsa güncel dosya, yoksa önbellekten.
 self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET') return;
+  if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(
     fetch(e.request)
       .then(r => { const copy = r.clone(); caches.open(C).then(c => c.put(e.request, copy)); return r; })

@@ -58,7 +58,7 @@ const KEY = 'butce-v1';
 const CATS = ['Market', 'Fatura', 'Kira', 'Ulaşım', 'Yeme-İçme', 'Eğlence', 'Sağlık', 'Giyim', 'Diğer'];
 const MN = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
 
-const def = () => ({ months: {}, cards: [], goal: { amount: 0, month: '', saved: 0 }, simSpend: null });
+const def = () => ({ months: {}, cards: [], goal: { amount: 0, month: '', saved: 0 }, simSpend: null, rates: { USD: 0, EUR: 0, at: '' } });
 function load() {
   try { return Object.assign(def(), JSON.parse(localStorage.getItem(KEY))); } catch (e) { return def(); }
 }
@@ -84,10 +84,16 @@ const label = m => { const [y, mo] = m.split('-'); return MN[mo - 1] + ' ' + y; 
 const getM = m => S.months[m] || { salary: null, expenses: [] };
 const ensureM = m => S.months[m] || (S.months[m] = { salary: null, expenses: [] });
 const spent = m => getM(m).expenses.reduce((a, e) => a + e.amount, 0);
-function salaryFor(m) {
+const CURS = ['TRY', 'USD', 'EUR'];
+const SYM = { TRY: '₺', USD: '$', EUR: '€' };
+const rateOf = c => (!c || c === 'TRY') ? 1 : (S.rates[c] || 0);
+function salaryRef(m) {
   const keys = Object.keys(S.months).filter(k => k <= m && S.months[k].salary != null).sort();
-  return keys.length ? S.months[keys[keys.length - 1]].salary : 0;
+  return keys.length ? S.months[keys[keys.length - 1]] : null;
 }
+const curOf = m => getM(m).cur || (salaryRef(m) || {}).cur || 'TRY';
+// Maaş her zaman TL karşılığıyla hesaplanır.
+function salaryFor(m) { const r = salaryRef(m); return r ? r.salary * rateOf(r.cur) : 0; }
 function cardDebt(c) {
   let d = c.base || 0;
   for (const k in S.months) for (const e of S.months[k].expenses) if (e.cardId === c.id) d += e.amount;
@@ -124,7 +130,19 @@ function vOzet() {
   return `<div class="card">
     <div class="row"><button class="icon" data-act="prev">‹</button><h2>${label(M)}</h2><button class="icon" data-act="next">›</button></div>
     <label>Aylık maaş / gelir</label>
-    <input inputmode="decimal" data-set="salary" value="${raw(m.salary)}" placeholder="${salaryFor(M) ? raw(salaryFor(M)) + ' (önceki aydan)' : '0'}">
+    <div class="grid" style="grid-template-columns:2fr 1fr">
+      <input inputmode="decimal" data-set="salary" value="${raw(m.salary)}" placeholder="${salaryRef(M) ? raw(salaryRef(M).salary) + ' (önceki aydan)' : '0'}">
+      <select data-set="cur">${CURS.map(c => `<option ${c === curOf(M) ? 'selected' : ''}>${c}</option>`).join('')}</select>
+    </div>
+    ${curOf(M) !== 'TRY' ? (rateOf(curOf(M)) ? `<div class="muted" style="margin-top:6px">≈ ${fmt(salaryFor(M))} (1 ${SYM[curOf(M)]} = ${raw(rateOf(curOf(M)))} ₺)</div>` : `<div class="neg" style="margin-top:6px">Kur girilmedi, aşağıdan kuru gir.</div>`) : ''}
+  </div>
+  <div class="card"><h3>Döviz kuru</h3>
+    <div class="grid">
+      <div><label>1 $ = ₺</label><input inputmode="decimal" data-rate="USD" value="${raw(S.rates.USD)}" placeholder="0"></div>
+      <div><label>1 € = ₺</label><input inputmode="decimal" data-rate="EUR" value="${raw(S.rates.EUR)}" placeholder="0"></div>
+    </div>
+    <button class="ghost full" data-act="fetchRates">İnternetten güncelle</button>
+    <div class="muted" style="margin-top:6px">${S.rates.at ? 'Son güncelleme: ' + S.rates.at.split('-').reverse().join('.') : 'Kuru elle girebilir veya internetten çekebilirsin.'}</div>
   </div>
   <div class="grid" style="margin-bottom:12px">
     <div class="stat"><small>Gelir</small><b>${fmt(salaryFor(M))}</b></div>
@@ -281,6 +299,14 @@ document.addEventListener('click', e => {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
   else if (a === 'import') $('#file').click();
+  else if (a === 'fetchRates') {
+    b.disabled = true; b.textContent = 'Alınıyor…';
+    Promise.all(['USD', 'EUR'].map(c => fetch('https://open.er-api.com/v6/latest/' + c).then(r => r.json()).then(j => {
+      if (!j.rates || !j.rates.TRY) throw 0;
+      S.rates[c] = Math.round(j.rates.TRY * 100) / 100;
+    }))).then(() => { S.rates.at = today(); persist(); render(); })
+      .catch(() => { alert('Kur alınamadı. Elle girebilirsin.'); render(); });
+  }
 });
 
 document.addEventListener('change', e => {
@@ -296,7 +322,9 @@ document.addEventListener('change', e => {
     };
     r.readAsText(t.files[0]); return;
   }
-  if (t.dataset.set === 'salary') { ensureM(M).salary = t.value.trim() === '' ? null : num(t.value); persist(); render(); }
+  if (t.dataset.set === 'salary') { const c = curOf(M), mm = ensureM(M); mm.cur = c; mm.salary = t.value.trim() === '' ? null : num(t.value); persist(); render(); }
+  else if (t.dataset.set === 'cur') { ensureM(M).cur = t.value; persist(); render(); }
+  else if (t.dataset.rate) { S.rates[t.dataset.rate] = num(t.value); persist(); render(); }
   else if (t.dataset.card) {
     const c = S.cards.find(x => x.id === t.dataset.card), f = t.dataset.field;
     c[f] = f === 'name' ? t.value.trim() || c.name : num(t.value); persist(); render();
