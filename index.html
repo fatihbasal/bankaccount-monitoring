@@ -142,6 +142,18 @@ function cardDebt(c) {
   for (const p of S.payments) if (p.cardId === c.id) d -= p.amt;
   return d;
 }
+// Para birimi değişince tutarlar güncel kurla yeni birime çevrilir (kur yoksa değerler olduğu gibi kalır).
+const r2 = x => Math.round(x * 100) / 100;
+const convK = (from, to) => { const a = rateOf(from), b = rateOf(to); return a && b && from !== to ? a / b : 0; };
+function convertArea(area, to) {
+  const k = convK(S.cur[area], to);
+  if (k) {
+    if (area === 'salary') for (const m in S.months) { const x = S.months[m]; if (x.salary != null) x.salary = r2(x.salary * k); }
+    else if (area === 'cards') { S.cards.forEach(c => { c.base = r2((c.base || 0) * k); c.limit = r2((c.limit || 0) * k); }); S.payments.forEach(p => { if (p.cardId) p.amt = r2(p.amt * k); }); }
+    else if (area === 'goal') { S.goal.amount = r2(S.goal.amount * k); S.goal.saved = r2(S.goal.saved * k); }
+  }
+  S.cur[area] = to;
+}
 const assetsTotal = () => S.assets.reduce((s, a) => s + assetVal(a), 0);
 const goalUsesAssets = () => S.goal.useAssets !== false;
 // Hedefe ulaşmak için eldeki para (TL): elle girilen birikim + (açıksa) varlıkların toplamı.
@@ -510,13 +522,18 @@ document.addEventListener('change', e => {
     r.readAsText(t.files[0]); return;
   }
   if (t.dataset.set === 'salary') { ensureM(M).salary = t.value.trim() === '' ? null : num(t.value); persist(); render(); }
-  else if (t.dataset.cur) { S.cur[t.dataset.cur] = t.value; persist(); render(); }
+  else if (t.dataset.cur) { convertArea(t.dataset.cur, t.value); persist(); render(); }
   else if (t.dataset.rate) { S.rates[t.dataset.rate] = num(t.value); persist(); render(); }
   else if (t.id === 'a-type') { NEWTYPE = t.value; render(); }
   else if (t.dataset.key) { S.finnhubKey = t.value.trim(); persist(); render(); }
   else if (t.dataset.asset) {
     const a = S.assets.find(x => x.id === t.dataset.asset), f = t.dataset.field;
-    a[f] = f === 'cur' ? t.value : num(t.value); persist(); render();
+    if (f === 'cur') {
+      const k = convK(a.cur, t.value);
+      if (k) { if (a.type === 'cash') a.qty = r2(a.qty * k); else a.price = r2(a.price * k); }
+      a.cur = t.value;
+    } else a[f] = num(t.value);
+    persist(); render();
   }
   else if (t.dataset.card) {
     const c = S.cards.find(x => x.id === t.dataset.card), f = t.dataset.field;
