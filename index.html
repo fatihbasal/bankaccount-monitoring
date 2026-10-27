@@ -59,7 +59,7 @@ const KEY = 'butce-v1';
 const CATS = ['Market', 'Fatura', 'Kira', 'Ulaşım', 'Yeme-İçme', 'Eğlence', 'Sağlık', 'Giyim', 'Diğer'];
 const MN = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
 
-const def = () => ({ months: {}, cards: [], goal: { amount: 0, month: '', saved: 0 }, simSpend: null, rates: { USD: 0, EUR: 0, at: '' }, cur: { salary: 'TRY', cards: 'TRY', goal: 'TRY' }, assets: [], pricesAt: '' });
+const def = () => ({ months: {}, cards: [], goal: { amount: 0, month: '', saved: 0 }, simSpend: null, rates: { USD: 0, EUR: 0, at: '' }, cur: { salary: 'TRY', cards: 'TRY', goal: 'TRY' }, assets: [], pricesAt: '', payments: [] });
 function load() {
   try {
     const d = Object.assign(def(), JSON.parse(localStorage.getItem(KEY)));
@@ -98,6 +98,30 @@ const label = m => { const [y, mo] = m.split('-'); return MN[mo - 1] + ' ' + y; 
 const getM = m => S.months[m] || { salary: null, expenses: [] };
 const ensureM = m => S.months[m] || (S.months[m] = { salary: null, expenses: [] });
 const spent = m => getM(m).expenses.reduce((a, e) => a + e.amount, 0);
+
+// Ayın kasası: maaşla başlar; karta/varlığa yazılmayan harcamalar ve "bu ayın parasından" ödenen kart borçları düşer.
+const monthOut = m => getM(m).expenses.filter(e => !e.cardId && !e.assetId).reduce((a, e) => a + e.amount, 0)
+  + S.payments.filter(p => p.month === m && p.src === 'month').reduce((a, p) => a + p.tl, 0);
+const remaining = m => salaryFor(m) - monthOut(m);
+const hasActivity = m => { const x = S.months[m]; return !!(x && (x.salary != null || x.expenses.length)) || S.payments.some(p => p.month === m); };
+function openMonths() {
+  const now = ymNow(), ks = new Set(Object.keys(S.months));
+  S.payments.forEach(p => ks.add(p.month)); ks.add(now);
+  return [...ks].filter(m => m <= now && (m === now || hasActivity(m)) && !getM(m).closed).sort();
+}
+const openRemainder = () => openMonths().reduce((s, m) => s + remaining(m), 0);
+// Varlıktan TL tutar düşer; yetersizse null döner. Düşülen miktarı (adet/gram/tutar) verir.
+function takeFromAsset(a, tl) {
+  const u = a.price * rateOf(a.cur);
+  if (!u) return null;
+  const q = tl / u;
+  if (q > a.qty + 1e-9) return null;
+  a.qty -= q;
+  return q;
+}
+const payOpts = withCards => '<option value="">Bu ayın parası</option>'
+  + (withCards ? S.cards.map(c => `<option value="c:${c.id}">💳 ${esc(c.name)}</option>`).join('') : '')
+  + S.assets.filter(a => a.type !== 'other' && a.qty > 0).map(a => `<option value="a:${a.id}">🏦 ${esc(a.name)}</option>`).join('');
 const CURS = ['TRY', 'USD', 'EUR'];
 const SYM = { TRY: '₺', USD: '$', EUR: '€' };
 const rateOf = c => (!c || c === 'TRY') ? 1 : (S.rates[c] || 0);
@@ -114,6 +138,7 @@ function cardDebt(c) {
   let d = c.base || 0;
   const r = rateOf(S.cur.cards) || 1;
   for (const k in S.months) for (const e of S.months[k].expenses) if (e.cardId === c.id) d += e.amount / r;
+  for (const p of S.payments) if (p.cardId === c.id) d -= p.amt;
   return d;
 }
 function goalInfo() {
@@ -133,6 +158,12 @@ function vOzet() {
   const m = getM(M), sal = m.salary || 0, sp = spent(M);
   const debt = S.cards.reduce((a, c) => a + cardDebt(c), 0) * rateOf(S.cur.cards);
   const gi = goalInfo();
+  const rem = remaining(M), cl = m.closed;
+  const old = openMonths().filter(x => x < ymNow() && x !== M);
+  const banner = old.length ? `<div class="card"><h3>Kapatılmamış aylar</h3>${old.map(x => `<div class="item"><span>${label(x)} · kalan ${fmt(remaining(x))}</span><button class="ghost" data-act="goMonth" data-m="${x}">Aç</button></div>`).join('')}</div>` : '';
+  const closeBlock = M > ymNow() ? '' : cl
+    ? `<div class="card"><h3>Ay kapandı</h3><div>${fmt(cl.amt)} varlıklara nakit olarak eklendi.</div><button class="ghost full" data-act="undoClose">Kapanışı geri al</button></div>`
+    : `<div class="card"><h3>Ay sonu</h3><div class="muted">Kalan nakit (${fmt(rem)}) Varlığım'a "Aylık artan nakit" olarak eklenir. Sonraki ay maaşla sıfırdan başlar.</div><button class="full" data-act="closeMonth">Ayı kapat</button></div>`;
   let goalBlock = '';
   if (gi && !gi.expired) {
     const cap = salaryFor(M) - gi.per;
@@ -166,10 +197,11 @@ function vOzet() {
   <div class="grid" style="margin-bottom:12px">
     <div class="stat"><small>Gelir</small><b>${fmt(salaryFor(M))}</b></div>
     <div class="stat"><small>Harcama</small><b>${fmt(sp)}</b></div>
-    <div class="stat"><small>Kalan</small><b class="${salaryFor(M) - sp < 0 ? 'neg' : 'pos'}">${fmt(salaryFor(M) - sp)}</b></div>
+    <div class="stat"><small>Nakit kalan</small><b class="${rem < 0 ? 'neg' : 'pos'}">${fmt(rem)}</b></div>
     <div class="stat"><small>Toplam kart borcu</small><b class="${debt > 0 ? 'warn' : ''}">${fmt(debt)}</b></div>
   </div>
-  ${goalBlock}
+  <div class="muted" style="margin:-4px 0 12px">Nakit kalan = gelir − nakit harcamalar − bu aydan ödenen kart borçları. Karta yapılan harcama, borç ödenince düşer.</div>
+  ${banner}${closeBlock}${goalBlock}
   <div class="card"><h3>Yedek</h3>
     <div class="muted" style="margin-bottom:10px">Veriler sadece bu telefonda saklanır. Ara sıra yedek al.</div>
     <div class="row"><button class="ghost" data-act="export" style="flex:1">Dışa aktar</button>
@@ -193,15 +225,15 @@ function vGider() {
     </div>
     <div class="grid">
       <div><label>Kategori</label><select id="f-cat">${CATS.map(c => `<option>${c}</option>`).join('')}</select></div>
-      <div><label>Ödeme</label><select id="f-card"><option value="">Nakit / Banka</option>${S.cards.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
+      <div><label>Ödeme</label><select id="f-card">${payOpts(true)}</select></div>
     </div>
     <button class="full" data-act="addExp">Harcama ekle</button>
   </div>
   ${cats.length ? `<div class="card"><h3>Kategoriler</h3>${cats.map(([c, v]) => `<div class="item"><span>${c}</span><b>${fmt(v)}</b></div>`).join('')}</div>` : ''}
   <div class="card"><h3>Harcamalar · ${fmt(spent(M))}</h3>
     ${list.length ? list.map(e => {
-      const c = S.cards.find(x => x.id === e.cardId);
-      return `<div class="item"><div><div>${esc(e.desc || e.cat)}</div><small>${e.date.slice(8)}.${e.date.slice(5, 7)} · ${e.cat}${c ? ' · ' + esc(c.name) : ''}</small></div>
+      const c = S.cards.find(x => x.id === e.cardId), ast = S.assets.find(x => x.id === e.assetId);
+      return `<div class="item"><div><div>${esc(e.desc || e.cat)}</div><small>${e.date.slice(8)}.${e.date.slice(5, 7)} · ${e.cat}${c ? ' · 💳 ' + esc(c.name) : ast ? ' · 🏦 ' + esc(ast.name) : ''}</small></div>
       <div style="text-align:right"><b>${fmt(e.amount)}</b><br><button class="icon" style="font-size:14px;padding:0" data-act="delExp" data-id="${e.id}">sil</button></div></div>`;
     }).join('') : '<div class="muted">Bu ay henüz harcama yok.</div>'}
   </div>`;
@@ -220,7 +252,14 @@ function vKart() {
       <div class="bar"><i class="${pct > 80 ? 'over' : ''}" style="width:${pct}%"></i></div>
       <div class="row"><span class="muted">Güncel borç</span><b class="${d > 0 ? 'warn' : ''}">${fmtC(d, S.cur.cards)}</b></div>
       <div class="row"><span class="muted">Kullanılabilir limit</span><b>${fmtC(Math.max(0, c.limit - d), S.cur.cards)}</b></div>
-      <div class="muted" style="margin-top:6px">Harcama eklerken bu kartı seçersen borca otomatik eklenir.</div></div>`;
+      <div class="muted" style="margin-top:6px">Harcama eklerken bu kartı seçersen borca otomatik eklenir.</div>
+      <div style="border-top:1px solid var(--line);margin-top:12px;padding-top:2px"><label>Borç öde · ${label(M)} ayına yazılır</label>
+        <div class="grid"><input id="p-amt-${c.id}" inputmode="decimal" placeholder="Tutar (${SYM[S.cur.cards]})"><select id="p-src-${c.id}">${payOpts(false)}</select></div>
+        <button class="full" data-act="payCard" data-id="${c.id}">Öde</button>
+        ${S.payments.filter(p => p.cardId === c.id).slice(-3).reverse().map(p => {
+          const ast = S.assets.find(x => x.id === p.src);
+          return `<div class="item"><small>${p.date.slice(8)}.${p.date.slice(5, 7)} · ${p.src === 'month' ? 'bu ayın parası' : ast ? esc(ast.name) : 'varlık'}</small><span>${fmtC(p.amt, S.cur.cards)} <button class="icon" style="font-size:14px;padding:0 6px" data-act="delPay" data-id="${p.id}">sil</button></span></div>`;
+        }).join('')}</div></div>`;
   }).join('')}
   <div class="card"><h3>Yeni kart</h3>
     <label>Kart adı</label><input id="c-name" placeholder="Örn. Garanti Bonus">
@@ -255,7 +294,8 @@ function fAdd() {
 function vVarlik() {
   const total = S.assets.reduce((s, a) => s + assetVal(a), 0);
   const debt = S.cards.reduce((s, c) => s + cardDebt(c), 0) * rateOf(S.cur.cards);
-  const net = total - debt;
+  const open = openRemainder();
+  const net = total + open - debt;
   const byType = {};
   S.assets.forEach(a => byType[a.type] = (byType[a.type] || 0) + assetVal(a));
   const missing = S.assets.some(a => a.cur !== 'TRY' && !rateOf(a.cur));
@@ -275,9 +315,10 @@ function vVarlik() {
     <div style="font-size:28px;font-weight:700" class="${net < 0 ? 'neg' : 'pos'}">${fmt(net)}</div>
     <div class="grid" style="margin-top:12px">
       <div class="stat"><small>Toplam varlık</small><b>${fmt(total)}</b></div>
+      <div class="stat"><small>Kapanmamış ayların nakdi</small><b class="${open < 0 ? 'neg' : ''}">${fmt(open)}</b></div>
       <div class="stat"><small>Kart borcu</small><b class="${debt > 0 ? 'warn' : ''}">${fmt(debt)}</b></div>
     </div>
-    <div class="muted" style="margin-top:8px">Net varlık = toplam varlık − kart borcu</div>
+    <div class="muted" style="margin-top:8px">Net varlık = toplam varlık + kapanmamış ayların nakdi − kart borcu</div>
     ${missing ? '<div class="neg" style="margin-top:8px">Bazı varlıkların kuru girilmedi, değerleri 0 sayılıyor. Özet sayfasından kuru gir.</div>' : ''}
   </div>
   ${total > 0 ? `<div class="card"><h3>Dağılım</h3>${Object.entries(byType).sort((x, y) => y[1] - x[1]).map(([t, v]) => `
@@ -360,11 +401,20 @@ document.addEventListener('click', e => {
     const amount = num($('#f-amt').value);
     if (!amount) { $('#f-amt').focus(); return; }
     const date = $('#f-date').value || M + '-01';
-    ensureM(date.slice(0, 7)).expenses.push({ id: uid(), desc: $('#f-desc').value.trim(), amount, date, cat: $('#f-cat').value, cardId: $('#f-card').value || null });
+    const sv = $('#f-card').value;
+    const ex = { id: uid(), desc: $('#f-desc').value.trim(), amount, date, cat: $('#f-cat').value, cardId: sv.startsWith('c:') ? sv.slice(2) : null };
+    if (sv.startsWith('a:')) {
+      const ast = S.assets.find(x => x.id === sv.slice(2)), q = ast && takeFromAsset(ast, amount);
+      if (q == null) { alert('Bu varlıkta yeterli bakiye yok.'); return; }
+      ex.assetId = ast.id; ex.assetQty = q;
+    }
+    ensureM(date.slice(0, 7)).expenses.push(ex);
     persist(); M = date.slice(0, 7); render();
   }
   else if (a === 'delExp') {
-    const m = ensureM(M); m.expenses = m.expenses.filter(x => x.id !== b.dataset.id); persist(); render();
+    const m = ensureM(M), ex = m.expenses.find(x => x.id === b.dataset.id);
+    if (ex && ex.assetId) { const ast = S.assets.find(x => x.id === ex.assetId); if (ast) ast.qty += ex.assetQty; }
+    m.expenses = m.expenses.filter(x => x.id !== b.dataset.id); persist(); render();
   }
   else if (a === 'addCard') {
     const name = $('#c-name').value.trim();
@@ -398,6 +448,34 @@ document.addEventListener('click', e => {
     S.assets.push(x); persist(); render();
     if (AUTO[T] || x.us) fetchPrices().then(() => render());
   }
+  else if (a === 'payCard') {
+    const id = b.dataset.id, amt = num($('#p-amt-' + id).value), sv = $('#p-src-' + id).value, r = rateOf(S.cur.cards);
+    if (!amt) { $('#p-amt-' + id).focus(); return; }
+    if (!r) { alert('Önce Özet sayfasından kuru gir.'); return; }
+    const p = { id: uid(), cardId: id, month: M, date: today().startsWith(M) ? today() : M + '-01', amt, tl: amt * r, src: 'month', qty: 0 };
+    if (sv) {
+      const ast = S.assets.find(x => x.id === sv.slice(2)), q = ast && takeFromAsset(ast, p.tl);
+      if (q == null) { alert('Bu varlıkta yeterli bakiye yok.'); return; }
+      p.src = ast.id; p.qty = q;
+    }
+    S.payments.push(p); persist(); render();
+  }
+  else if (a === 'delPay') {
+    const p = S.payments.find(x => x.id === b.dataset.id);
+    if (p) { const ast = S.assets.find(x => x.id === p.src); if (ast) ast.qty += p.qty; S.payments = S.payments.filter(x => x !== p); persist(); render(); }
+  }
+  else if (a === 'closeMonth') {
+    const amt = Math.round(remaining(M) * 100) / 100;
+    if (amt < 0 && !confirm('Bu ayın kalanı eksi (' + fmt(amt) + '). Nakit varlıktan düşülecek. Devam?')) return;
+    let ast = S.assets.find(x => x.roll);
+    if (!ast) { ast = { id: uid(), type: 'cash', name: 'Aylık artan nakit', sym: '', qty: 0, price: 1, cur: 'TRY', at: '', roll: true }; S.assets.push(ast); }
+    ast.qty += amt; ensureM(M).closed = { assetId: ast.id, amt }; persist(); render();
+  }
+  else if (a === 'undoClose') {
+    const m = ensureM(M), cl = m.closed;
+    if (cl) { const ast = S.assets.find(x => x.id === cl.assetId); if (ast) ast.qty -= cl.amt; delete m.closed; persist(); render(); }
+  }
+  else if (a === 'goMonth') { M = b.dataset.m; render(); }
   else if (a === 'delAsset') { S.assets = S.assets.filter(x => x.id !== b.dataset.id); persist(); render(); }
   else if (a === 'refreshAll') {
     b.disabled = true; b.textContent = 'Alınıyor…';
