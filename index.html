@@ -571,10 +571,27 @@ async function refreshAll() {
 }
 
 render();
-// Kur ve fiyatlar bugün güncellenmediyse açılışta sessizce yenile; başarısız olursa kayıtlı değerler kalır.
-if ((S.rates.at !== today() || S.pricesAt !== today()) && navigator.onLine) {
-  refreshAll().then(() => { const el = document.activeElement; if (!el || !/INPUT|SELECT/.test(el.tagName)) render(); });
+// Kullanıcı bir şey yazarken ekranı yenileme.
+function safeRender() {
+  const el = document.activeElement;
+  const typing = ['a-name', 'a-qty', 'a-price', 'f-desc', 'f-amt'].some(id => $('#' + id) && $('#' + id).value);
+  if ((!el || !/INPUT|SELECT/.test(el.tagName)) && !typing) render();
 }
+
+// Uygulama ekrandayken fiyatlar dakikada bir yenilenir (Finnhub ücretsiz limiti dakikada 60 istek).
+let pxBusy = false, pxLast = 0;
+async function tick(force) {
+  if (pxBusy || !navigator.onLine || document.hidden) return;
+  if (!force && Date.now() - pxLast < 55000) return;
+  if (!S.assets.some(a => isAuto(a))) return;
+  pxBusy = true;
+  try { await fetchPrices(); pxLast = Date.now(); if (TAB === 'varlik') safeRender(); } finally { pxBusy = false; }
+}
+setInterval(tick, 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+
+// Kur günde bir, fiyatlar her açılışta güncellenir; başarısız olursa kayıtlı değerler kalır.
+(S.rates.at !== today() && navigator.onLine ? fetchRates().then(safeRender).catch(() => {}) : Promise.resolve()).then(() => tick(true));
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
