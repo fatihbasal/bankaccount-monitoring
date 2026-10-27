@@ -145,7 +145,9 @@ function cardDebt(c) {
 const assetsTotal = () => S.assets.reduce((s, a) => s + assetVal(a), 0);
 const goalUsesAssets = () => S.goal.useAssets !== false;
 // Hedefe ulaşmak için eldeki para (TL): elle girilen birikim + (açıksa) varlıkların toplamı.
-const goalHave = () => S.goal.saved * rateOf(S.cur.goal) + (goalUsesAssets() ? assetsTotal() : 0);
+const cardDebtTL = () => S.cards.reduce((a, c) => a + cardDebt(c), 0) * rateOf(S.cur.cards);
+const netWorth = () => assetsTotal() + openRemainder() - cardDebtTL();
+const goalHave = () => S.goal.saved * rateOf(S.cur.goal) + (goalUsesAssets() ? netWorth() : 0);
 function goalInfo() {
   const g = S.goal;
   const gr = rateOf(S.cur.goal);
@@ -357,8 +359,8 @@ function vHedef() {
     <label>Hedef tutar</label><input inputmode="decimal" data-goal="amount" value="${raw(g.amount)}" placeholder="0">
     <label>Hedef ay</label><input type="month" data-goal="month" value="${g.month}">
     <label>Şu ana kadar biriken (varlıklar dışında)</label><input inputmode="decimal" data-goal="saved" value="${raw(g.saved)}" placeholder="0">
-    <label class="row" style="margin-top:12px"><span>Varlıklarımı da say (${fmt(assetsTotal())})</span><input type="checkbox" data-goal="useAssets" ${goalUsesAssets() ? 'checked' : ''} style="width:auto"></label>
-    <div class="muted" style="margin-top:6px">Eldeki para: <b>${fmt(goalHave())}</b></div>
+    <label class="row" style="margin-top:12px"><span>Net varlığımı da say (${fmt(netWorth())})</span><input type="checkbox" data-goal="useAssets" ${goalUsesAssets() ? 'checked' : ''} style="width:auto"></label>
+    <div class="muted" style="margin-top:6px">Net varlık = varlıklar + kapanmamış ayların nakdi − kart borcu<br>Eldeki para: <b>${fmt(goalHave())}</b></div>
   </div>
   <div class="card"><h3>Plan</h3>${plan}
     <div class="muted" style="margin-top:8px">Hesapta ${label(now)} maaşın: ${fmt(sal)}</div></div>
