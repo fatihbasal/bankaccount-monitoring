@@ -2,7 +2,7 @@
 <html lang="tr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Bütçe">
@@ -14,7 +14,8 @@
 <style>
 :root{--bg:#f4f6f5;--card:#fff;--text:#14201d;--muted:#667570;--line:#e2e8e5;--accent:#0f766e;--accent-t:#fff;--good:#15803d;--bad:#b91c1c;--warn:#b45309}
 @media (prefers-color-scheme:dark){:root{--bg:#0e1513;--card:#17211e;--text:#e8efec;--muted:#8fa19b;--line:#27352f;--accent:#2dd4bf;--accent-t:#06201b;--good:#4ade80;--bad:#f87171;--warn:#fbbf24}}
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding-bottom:calc(76px + env(safe-area-inset-bottom))}
 #app{max-width:560px;margin:0 auto;padding:16px;padding-top:calc(16px + env(safe-area-inset-top))}
 h2{font-size:18px;margin:0}
@@ -571,6 +572,9 @@ async function refreshAll() {
 }
 
 render();
+// iOS bazen user-scalable=no'yu yok sayar; iki parmakla yakınlaştırmayı da engelle.
+['gesturestart', 'gesturechange', 'gestureend'].forEach(t => document.addEventListener(t, e => e.preventDefault()));
+
 // Kullanıcı bir şey yazarken ekranı yenileme.
 function safeRender() {
   const el = document.activeElement;
