@@ -51,6 +51,7 @@ nav button span{display:block;font-size:20px}
   <button data-tab="ozet"><span>📊</span>Özet</button>
   <button data-tab="gider"><span>🧾</span>Harcamalar</button>
   <button data-tab="kart"><span>💳</span>Kartlar</button>
+  <button data-tab="varlik"><span>🏦</span>Varlığım</button>
   <button data-tab="hedef"><span>🎯</span>Hedef</button>
 </nav>
 <script>
@@ -58,7 +59,7 @@ const KEY = 'butce-v1';
 const CATS = ['Market', 'Fatura', 'Kira', 'Ulaşım', 'Yeme-İçme', 'Eğlence', 'Sağlık', 'Giyim', 'Diğer'];
 const MN = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
 
-const def = () => ({ months: {}, cards: [], goal: { amount: 0, month: '', saved: 0 }, simSpend: null, rates: { USD: 0, EUR: 0, at: '' }, cur: { salary: 'TRY', cards: 'TRY', goal: 'TRY' } });
+const def = () => ({ months: {}, cards: [], goal: { amount: 0, month: '', saved: 0 }, simSpend: null, rates: { USD: 0, EUR: 0, at: '' }, cur: { salary: 'TRY', cards: 'TRY', goal: 'TRY' }, assets: [], pricesAt: '' });
 function load() {
   try {
     const d = Object.assign(def(), JSON.parse(localStorage.getItem(KEY)));
@@ -76,7 +77,14 @@ let S = load();
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = n => (Math.round((n || 0) * 100) / 100).toLocaleString('tr-TR', { maximumFractionDigits: 2 }) + ' ₺';
-const num = v => { const n = parseFloat(String(v).replace(/\./g, '').replace(',', '.')); return isNaN(n) ? 0 : n; };
+// "1.250,50" ve "1250,5" TR biçimi; virgülsüz "0.01" ondalık, "1.250" ve "1.250.000" binlik sayılır.
+const num = v => {
+  let s = String(v).trim().replace(/\s/g, '');
+  if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  else if ((s.match(/\./g) || []).length > 1 || /^[1-9]\d{0,2}\.\d{3}$/.test(s)) s = s.replace(/\./g, '');
+  const n = parseFloat(s);
+  return isNaN(n) ? 0 : n;
+};
 const raw = n => (n ? String(n).replace('.', ',') : '');
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -223,6 +231,61 @@ function vKart() {
     <button class="full" data-act="addCard">Kart ekle</button></div>`;
 }
 
+const TYPES = { cash: 'Nakit / Mevduat', gold: 'Altın', silver: 'Gümüş', stock: 'Hisse', crypto: 'Kripto', other: 'Diğer' };
+const COINS = [['bitcoin', 'Bitcoin'], ['ethereum', 'Ethereum'], ['solana', 'Solana'], ['ripple', 'XRP'], ['binancecoin', 'BNB'], ['dogecoin', 'Dogecoin']];
+const AUTO = { gold: 1, silver: 1, crypto: 1 }; // fiyatı internetten gelenler
+const assetVal = a => a.qty * a.price * rateOf(a.cur);
+let NEWTYPE = 'gold';
+
+function fAdd() {
+  const T = NEWTYPE;
+  const curS = `<select id="a-cur">${CURS.map(c => `<option>${c}</option>`).join('')}</select>`;
+  let f;
+  if (T === 'cash') f = `<label>Ad</label><input id="a-name" placeholder="Örn. Vadesiz hesap"><div class="grid"><div><label>Tutar</label><input id="a-qty" inputmode="decimal" placeholder="0"></div><div><label>Para birimi</label>${curS}</div></div>`;
+  else if (T === 'gold' || T === 'silver') f = `<label>Miktar (gram)</label><input id="a-qty" inputmode="decimal" placeholder="0">`;
+  else if (T === 'crypto') f = `<label>Coin</label><select id="a-coin">${COINS.map(([id, n]) => `<option value="${id}">${n}</option>`).join('')}</select><label>Adet</label><input id="a-qty" inputmode="decimal" placeholder="0">`;
+  else if (T === 'stock') f = `<label>Sembol / ad</label><input id="a-name" placeholder="Örn. THYAO"><div class="grid"><div><label>Adet</label><input id="a-qty" inputmode="decimal" placeholder="0"></div><div><label>Birim fiyat</label><input id="a-price" inputmode="decimal" placeholder="0"></div></div><label>Para birimi</label>${curS}`;
+  else f = `<label>Ad</label><input id="a-name" placeholder="Örn. Araba"><div class="grid"><div><label>Değer</label><input id="a-price" inputmode="decimal" placeholder="0"></div><div><label>Para birimi</label>${curS}</div></div>`;
+  return `<div class="card"><h3>Varlık ekle</h3><label>Tür</label><select id="a-type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${k === T ? 'selected' : ''}>${v}</option>`).join('')}</select>${f}<button class="full" data-act="addAsset">Ekle</button></div>`;
+}
+
+function vVarlik() {
+  const total = S.assets.reduce((s, a) => s + assetVal(a), 0);
+  const debt = S.cards.reduce((s, c) => s + cardDebt(c), 0) * rateOf(S.cur.cards);
+  const net = total - debt;
+  const byType = {};
+  S.assets.forEach(a => byType[a.type] = (byType[a.type] || 0) + assetVal(a));
+  const missing = S.assets.some(a => a.cur !== 'TRY' && !rateOf(a.cur));
+  const unit = { gold: 'Miktar (gram)', silver: 'Miktar (gram)', cash: 'Tutar', crypto: 'Adet', stock: 'Adet' };
+  const row = a => {
+    const cs = `<select data-asset="${a.id}" data-field="cur">${CURS.map(c => `<option ${c === a.cur ? 'selected' : ''}>${c}</option>`).join('')}</select>`;
+    const q = `<div><label>${unit[a.type]}</label><input inputmode="decimal" data-asset="${a.id}" data-field="qty" value="${raw(a.qty)}"></div>`;
+    const p = `<div><label>${a.type === 'other' ? 'Değer' : 'Birim fiyat'}${AUTO[a.type] ? ' (₺, otomatik)' : ''}</label><input inputmode="decimal" data-asset="${a.id}" data-field="price" value="${raw(a.price)}"></div>`;
+    const c = `<div><label>Para birimi</label>${cs}</div>`;
+    const fields = a.type === 'cash' ? q + c : a.type === 'other' ? p + c : AUTO[a.type] ? q + p : q + p + `<div style="grid-column:span 2">${c}</div>`;
+    return `<div class="card"><div class="row"><div><b>${esc(a.name)}</b><br><small class="muted">${TYPES[a.type]}${a.at ? ' · fiyat ' + a.at.split('-').reverse().join('.') : ''}</small></div>
+      <button class="icon" data-act="delAsset" data-id="${a.id}">🗑</button></div>
+      <div class="grid">${fields}</div>
+      <div class="row" style="margin-top:10px"><span class="muted">Değeri</span><b>${fmt(assetVal(a))}</b></div></div>`;
+  };
+  return `<div class="card"><h3>Net varlık</h3>
+    <div style="font-size:28px;font-weight:700" class="${net < 0 ? 'neg' : 'pos'}">${fmt(net)}</div>
+    <div class="grid" style="margin-top:12px">
+      <div class="stat"><small>Toplam varlık</small><b>${fmt(total)}</b></div>
+      <div class="stat"><small>Kart borcu</small><b class="${debt > 0 ? 'warn' : ''}">${fmt(debt)}</b></div>
+    </div>
+    <div class="muted" style="margin-top:8px">Net varlık = toplam varlık − kart borcu</div>
+    ${missing ? '<div class="neg" style="margin-top:8px">Bazı varlıkların kuru girilmedi, değerleri 0 sayılıyor. Özet sayfasından kuru gir.</div>' : ''}
+  </div>
+  ${total > 0 ? `<div class="card"><h3>Dağılım</h3>${Object.entries(byType).sort((x, y) => y[1] - x[1]).map(([t, v]) => `
+    <div style="margin-bottom:8px"><div class="row"><span>${TYPES[t]}</span><b>${fmt(v)} · %${Math.round(v / total * 100)}</b></div>
+    <div class="bar"><i style="width:${v / total * 100}%"></i></div></div>`).join('')}</div>` : ''}
+  <div class="card"><button class="ghost" style="width:100%" data-act="refreshAll">Fiyatları güncelle</button>
+    <div class="muted" style="margin-top:6px">${S.pricesAt ? 'Son güncelleme: ' + S.pricesAt.split('-').reverse().join('.') + '. ' : ''}Altın, gümüş ve kripto fiyatı otomatik gelir. Hisse ve diğer varlıkların fiyatını sen girersin.</div></div>
+  ${S.assets.map(row).join('')}
+  ${fAdd()}`;
+}
+
 function vHedef() {
   const g = S.goal, gi = goalInfo(), now = ymNow(), sal = salaryFor(now);
   let plan = '<div class="muted">Hedef tutarı ve tarihi gir.</div>';
@@ -272,7 +335,7 @@ function sim() {
 }
 
 function render() {
-  $('#app').innerHTML = { ozet: vOzet, gider: vGider, kart: vKart, hedef: vHedef }[TAB]();
+  $('#app').innerHTML = { ozet: vOzet, gider: vGider, kart: vKart, varlik: vVarlik, hedef: vHedef }[TAB]();
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === TAB));
   if (TAB === 'hedef') sim();
 }
@@ -314,6 +377,23 @@ document.addEventListener('click', e => {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
   else if (a === 'import') $('#file').click();
+  else if (a === 'addAsset') {
+    const T = NEWTYPE, v = id => $('#' + id) ? $('#' + id).value : '';
+    const x = { id: uid(), type: T, name: v('a-name').trim(), sym: '', qty: num(v('a-qty')), price: num(v('a-price')), cur: v('a-cur') || 'TRY', at: '' };
+    if (T === 'cash') { x.price = 1; x.name = x.name || 'Nakit'; }
+    else if (T === 'gold' || T === 'silver') { x.name = T === 'gold' ? 'Altın' : 'Gümüş'; x.cur = 'TRY'; }
+    else if (T === 'crypto') { const s = $('#a-coin'); x.sym = s.value; x.name = s.options[s.selectedIndex].text; x.cur = 'TRY'; }
+    else if (T === 'other') { x.qty = 1; x.name = x.name || 'Diğer'; }
+    else x.name = x.name || 'Hisse';
+    if (T === 'other' ? !x.price : !x.qty) { ($('#a-qty') || $('#a-price')).focus(); return; }
+    S.assets.push(x); persist(); render();
+    if (AUTO[T]) fetchPrices().then(() => render());
+  }
+  else if (a === 'delAsset') { S.assets = S.assets.filter(x => x.id !== b.dataset.id); persist(); render(); }
+  else if (a === 'refreshAll') {
+    b.disabled = true; b.textContent = 'Alınıyor…';
+    refreshAll().then(errs => { render(); if (errs.length) alert('Alınamadı: ' + errs.join(', ') + '. Fiyatı elle girebilirsin.'); });
+  }
   else if (a === 'fetchRates') {
     b.disabled = true; b.textContent = 'Alınıyor…';
     fetchRates().then(() => render()).catch(() => { alert('Kur alınamadı. Elle girebilirsin.'); render(); });
@@ -336,6 +416,11 @@ document.addEventListener('change', e => {
   if (t.dataset.set === 'salary') { ensureM(M).salary = t.value.trim() === '' ? null : num(t.value); persist(); render(); }
   else if (t.dataset.cur) { S.cur[t.dataset.cur] = t.value; persist(); render(); }
   else if (t.dataset.rate) { S.rates[t.dataset.rate] = num(t.value); persist(); render(); }
+  else if (t.id === 'a-type') { NEWTYPE = t.value; render(); }
+  else if (t.dataset.asset) {
+    const a = S.assets.find(x => x.id === t.dataset.asset), f = t.dataset.field;
+    a[f] = f === 'cur' ? t.value : num(t.value); persist(); render();
+  }
   else if (t.dataset.card) {
     const c = S.cards.find(x => x.id === t.dataset.card), f = t.dataset.field;
     c[f] = f === 'name' ? t.value.trim() || c.name : num(t.value); persist(); render();
@@ -355,9 +440,41 @@ function fetchRates() {
   }))).then(() => { S.rates.at = today(); persist(); });
 }
 
+// Altın/gümüş (gold-api.com, ons→gram) ve kripto (CoinGecko) fiyatları. Hisse için ücretsiz, tarayıcıdan çağrılabilir kaynak yok.
+async function fetchPrices() {
+  const j = async u => { const r = await fetch(u); if (!r.ok) throw 0; return r.json(); };
+  const errs = [];
+  const metals = S.assets.filter(a => a.type === 'gold' || a.type === 'silver');
+  if (metals.length) {
+    try {
+      const usd = rateOf('USD'); if (!usd) throw 0;
+      for (const [t, sym] of [['gold', 'XAU'], ['silver', 'XAG']]) {
+        const list = metals.filter(a => a.type === t); if (!list.length) continue;
+        const p = (await j('https://api.gold-api.com/price/' + sym)).price;
+        list.forEach(a => { a.price = Math.round(p / 31.1035 * usd * 100) / 100; a.cur = 'TRY'; a.at = today(); });
+      }
+    } catch (e) { errs.push('altın/gümüş'); }
+  }
+  const coins = S.assets.filter(a => a.type === 'crypto');
+  if (coins.length) {
+    try {
+      const d = await j('https://api.coingecko.com/api/v3/simple/price?vs_currencies=try&ids=' + [...new Set(coins.map(a => a.sym))].join(','));
+      coins.forEach(a => { if (d[a.sym] && d[a.sym].try) { a.price = d[a.sym].try; a.cur = 'TRY'; a.at = today(); } });
+    } catch (e) { errs.push('kripto'); }
+  }
+  S.pricesAt = today(); persist();
+  return errs;
+}
+async function refreshAll() {
+  try { await fetchRates(); } catch (e) {}
+  return fetchPrices();
+}
+
 render();
-// Kur bugün güncellenmediyse açılışta sessizce yenile; başarısız olursa kayıtlı kur kalır.
-if (S.rates.at !== today() && navigator.onLine) fetchRates().then(() => { if (TAB !== 'gider') render(); }).catch(() => {});
+// Kur ve fiyatlar bugün güncellenmediyse açılışta sessizce yenile; başarısız olursa kayıtlı değerler kalır.
+if ((S.rates.at !== today() || S.pricesAt !== today()) && navigator.onLine) {
+  refreshAll().then(() => { const el = document.activeElement; if (!el || !/INPUT|SELECT/.test(el.tagName)) render(); });
+}
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
