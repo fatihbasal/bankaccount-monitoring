@@ -58,9 +58,15 @@ const KEY = 'butce-v1';
 const CATS = ['Market', 'Fatura', 'Kira', 'Ulaşım', 'Yeme-İçme', 'Eğlence', 'Sağlık', 'Giyim', 'Diğer'];
 const MN = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
 
-const def = () => ({ months: {}, cards: [], goal: { amount: 0, month: '', saved: 0 }, simSpend: null, rates: { USD: 0, EUR: 0, at: '' } });
+const def = () => ({ months: {}, cards: [], goal: { amount: 0, month: '', saved: 0 }, simSpend: null, rates: { USD: 0, EUR: 0, at: '' }, cur: { salary: 'TRY', cards: 'TRY', goal: 'TRY' } });
 function load() {
-  try { return Object.assign(def(), JSON.parse(localStorage.getItem(KEY))); } catch (e) { return def(); }
+  try {
+    const d = Object.assign(def(), JSON.parse(localStorage.getItem(KEY)));
+    d.cur = Object.assign(def().cur, d.cur);
+    // Eski sürümde aya özel olan para birimini tek maaş birimine taşı.
+    for (const k in d.months) { const c = d.months[k].cur; if (c && c !== 'TRY') d.cur.salary = c; delete d.months[k].cur; }
+    return d;
+  } catch (e) { return def(); }
 }
 function persist() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {}
@@ -91,20 +97,24 @@ function salaryRef(m) {
   const keys = Object.keys(S.months).filter(k => k <= m && S.months[k].salary != null).sort();
   return keys.length ? S.months[keys[keys.length - 1]] : null;
 }
-const curOf = m => getM(m).cur || (salaryRef(m) || {}).cur || 'TRY';
-// Maaş her zaman TL karşılığıyla hesaplanır.
-function salaryFor(m) { const r = salaryRef(m); return r ? r.salary * rateOf(r.cur) : 0; }
+// Maaş, kartlar ve hedef kendi tek para birimini taşır (S.cur); hesaplar TL üzerinden yapılır.
+function salaryFor(m) { const r = salaryRef(m); return r ? r.salary * rateOf(S.cur.salary) : 0; }
+const fmtC = (n, c) => c === 'TRY' ? fmt(n) : (Math.round((n || 0) * 100) / 100).toLocaleString('tr-TR', { maximumFractionDigits: 2 }) + ' ' + SYM[c];
+const curSel = k => `<select data-cur="${k}">${CURS.map(c => `<option ${c === S.cur[k] ? 'selected' : ''}>${c}</option>`).join('')}</select>`;
+const noRate = k => S.cur[k] !== 'TRY' && !rateOf(S.cur[k]) ? `<div class="neg" style="margin-top:6px">Kur girilmedi. Özet sayfasındaki Döviz kuru bölümünden gir.</div>` : '';
 function cardDebt(c) {
   let d = c.base || 0;
-  for (const k in S.months) for (const e of S.months[k].expenses) if (e.cardId === c.id) d += e.amount;
+  const r = rateOf(S.cur.cards) || 1;
+  for (const k in S.months) for (const e of S.months[k].expenses) if (e.cardId === c.id) d += e.amount / r;
   return d;
 }
 function goalInfo() {
   const g = S.goal;
-  if (!g.amount || !g.month) return null;
+  const gr = rateOf(S.cur.goal);
+  if (!g.amount || !g.month || !gr) return null;
   const now = ymNow();
   const n = diff(now, g.month) + 1;
-  const need = Math.max(0, g.amount - g.saved);
+  const need = Math.max(0, (g.amount - g.saved) * gr);
   if (n < 1) return { expired: true, need };
   return { n, need, per: need / n };
 }
@@ -113,7 +123,7 @@ let M = ymNow(), TAB = 'ozet';
 
 function vOzet() {
   const m = getM(M), sal = m.salary || 0, sp = spent(M);
-  const debt = S.cards.reduce((a, c) => a + cardDebt(c), 0);
+  const debt = S.cards.reduce((a, c) => a + cardDebt(c), 0) * rateOf(S.cur.cards);
   const gi = goalInfo();
   let goalBlock = '';
   if (gi && !gi.expired) {
@@ -132,9 +142,10 @@ function vOzet() {
     <label>Aylık maaş / gelir</label>
     <div class="grid" style="grid-template-columns:2fr 1fr">
       <input inputmode="decimal" data-set="salary" value="${raw(m.salary)}" placeholder="${salaryRef(M) ? raw(salaryRef(M).salary) + ' (önceki aydan)' : '0'}">
-      <select data-set="cur">${CURS.map(c => `<option ${c === curOf(M) ? 'selected' : ''}>${c}</option>`).join('')}</select>
+      ${curSel('salary')}
     </div>
-    ${curOf(M) !== 'TRY' ? (rateOf(curOf(M)) ? `<div class="muted" style="margin-top:6px">≈ ${fmt(salaryFor(M))} (1 ${SYM[curOf(M)]} = ${raw(rateOf(curOf(M)))} ₺)</div>` : `<div class="neg" style="margin-top:6px">Kur girilmedi, aşağıdan kuru gir.</div>`) : ''}
+    ${noRate('salary')}
+    ${S.cur.salary !== 'TRY' && rateOf(S.cur.salary) ? `<div class="muted" style="margin-top:6px">≈ ${fmt(salaryFor(M))} (1 ${SYM[S.cur.salary]} = ${raw(rateOf(S.cur.salary))} ₺) · para birimi tüm aylar için geçerli</div>` : ''}
   </div>
   <div class="card"><h3>Döviz kuru</h3>
     <div class="grid">
@@ -189,7 +200,9 @@ function vGider() {
 }
 
 function vKart() {
-  return `${S.cards.map(c => {
+  return `<div class="card"><div class="row"><h3 style="margin:0">Kart para birimi</h3><div style="width:110px">${curSel('cards')}</div></div>
+    ${noRate('cards')}<div class="muted" style="margin-top:6px">Tüm kartlar için geçerli. Harcamalar TL girilir, borca kurla çevrilerek eklenir.</div></div>
+  ${S.cards.map(c => {
     const d = cardDebt(c), pct = c.limit ? Math.min(100, d / c.limit * 100) : 0;
     return `<div class="card"><div class="row"><input data-card="${c.id}" data-field="name" value="${esc(c.name)}" style="font-weight:700"><button class="icon" data-act="delCard" data-id="${c.id}">🗑</button></div>
       <div class="grid">
@@ -197,8 +210,8 @@ function vKart() {
         <div><label>Devreden borç</label><input inputmode="decimal" data-card="${c.id}" data-field="base" value="${raw(c.base)}"></div>
       </div>
       <div class="bar"><i class="${pct > 80 ? 'over' : ''}" style="width:${pct}%"></i></div>
-      <div class="row"><span class="muted">Güncel borç</span><b class="${d > 0 ? 'warn' : ''}">${fmt(d)}</b></div>
-      <div class="row"><span class="muted">Kullanılabilir limit</span><b>${fmt(Math.max(0, c.limit - d))}</b></div>
+      <div class="row"><span class="muted">Güncel borç</span><b class="${d > 0 ? 'warn' : ''}">${fmtC(d, S.cur.cards)}</b></div>
+      <div class="row"><span class="muted">Kullanılabilir limit</span><b>${fmtC(Math.max(0, c.limit - d), S.cur.cards)}</b></div>
       <div class="muted" style="margin-top:6px">Harcama eklerken bu kartı seçersen borca otomatik eklenir.</div></div>`;
   }).join('')}
   <div class="card"><h3>Yeni kart</h3>
@@ -224,7 +237,8 @@ function vHedef() {
       ${cap < 0 ? '<div class="neg" style="margin-top:10px">Mevcut maaşla bu hedefe ulaşmak mümkün değil.</div>' : ''}`;
   }
   const simDef = S.simSpend != null ? S.simSpend : (gi && !gi.expired ? Math.max(0, Math.round(sal - gi.per)) : 0);
-  return `<div class="card"><h3>Birikim hedefi</h3>
+  return `<div class="card"><div class="row"><h3 style="margin:0">Birikim hedefi</h3><div style="width:110px">${curSel('goal')}</div></div>
+    ${noRate('goal')}
     <label>Hedef tutar</label><input inputmode="decimal" data-goal="amount" value="${raw(g.amount)}" placeholder="0">
     <label>Hedef ay</label><input type="month" data-goal="month" value="${g.month}">
     <label>Şu ana kadar biriken</label><input inputmode="decimal" data-goal="saved" value="${raw(g.saved)}" placeholder="0">
@@ -240,7 +254,8 @@ function sim() {
   const out = $('#simout'); if (!out) return;
   const spend = num($('#simin').value);
   S.simSpend = spend; persist();
-  const now = ymNow(), sal = salaryFor(now), sv = sal - spend, gi = goalInfo(), g = S.goal;
+  const now = ymNow(), sal = salaryFor(now), sv = sal - spend, gi = goalInfo(), gr = rateOf(S.cur.goal);
+  const g = { amount: S.goal.amount * gr, saved: S.goal.saved * gr, month: S.goal.month }; // TL karşılığı
   let h = `<div class="stat"><small>Aylık birikim</small><b class="${sv < 0 ? 'neg' : 'pos'}">${fmt(sv)}</b></div>`;
   if (gi && !gi.expired) {
     const proj = g.saved + sv * gi.n;
@@ -301,11 +316,7 @@ document.addEventListener('click', e => {
   else if (a === 'import') $('#file').click();
   else if (a === 'fetchRates') {
     b.disabled = true; b.textContent = 'Alınıyor…';
-    Promise.all(['USD', 'EUR'].map(c => fetch('https://open.er-api.com/v6/latest/' + c).then(r => r.json()).then(j => {
-      if (!j.rates || !j.rates.TRY) throw 0;
-      S.rates[c] = Math.round(j.rates.TRY * 100) / 100;
-    }))).then(() => { S.rates.at = today(); persist(); render(); })
-      .catch(() => { alert('Kur alınamadı. Elle girebilirsin.'); render(); });
+    fetchRates().then(() => render()).catch(() => { alert('Kur alınamadı. Elle girebilirsin.'); render(); });
   }
 });
 
@@ -322,8 +333,8 @@ document.addEventListener('change', e => {
     };
     r.readAsText(t.files[0]); return;
   }
-  if (t.dataset.set === 'salary') { const c = curOf(M), mm = ensureM(M); mm.cur = c; mm.salary = t.value.trim() === '' ? null : num(t.value); persist(); render(); }
-  else if (t.dataset.set === 'cur') { ensureM(M).cur = t.value; persist(); render(); }
+  if (t.dataset.set === 'salary') { ensureM(M).salary = t.value.trim() === '' ? null : num(t.value); persist(); render(); }
+  else if (t.dataset.cur) { S.cur[t.dataset.cur] = t.value; persist(); render(); }
   else if (t.dataset.rate) { S.rates[t.dataset.rate] = num(t.value); persist(); render(); }
   else if (t.dataset.card) {
     const c = S.cards.find(x => x.id === t.dataset.card), f = t.dataset.field;
@@ -337,7 +348,16 @@ document.addEventListener('change', e => {
 
 document.addEventListener('input', e => { if (e.target.id === 'simin') sim(); });
 
+function fetchRates() {
+  return Promise.all(['USD', 'EUR'].map(c => fetch('https://open.er-api.com/v6/latest/' + c).then(r => r.json()).then(j => {
+    if (!j.rates || !j.rates.TRY) throw 0;
+    S.rates[c] = Math.round(j.rates.TRY * 100) / 100;
+  }))).then(() => { S.rates.at = today(); persist(); });
+}
+
 render();
+// Kur bugün güncellenmediyse açılışta sessizce yenile; başarısız olursa kayıtlı kur kalır.
+if (S.rates.at !== today() && navigator.onLine) fetchRates().then(() => { if (TAB !== 'gider') render(); }).catch(() => {});
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
