@@ -235,6 +235,7 @@ const TYPES = { cash: 'Nakit / Mevduat', gold: 'Altın', silver: 'Gümüş', sto
 const COINS = [['bitcoin', 'Bitcoin'], ['ethereum', 'Ethereum'], ['solana', 'Solana'], ['ripple', 'XRP'], ['binancecoin', 'BNB'], ['dogecoin', 'Dogecoin']];
 const AUTO = { gold: 1, silver: 1, crypto: 1 }; // fiyatı internetten gelenler
 const assetVal = a => a.qty * a.price * rateOf(a.cur);
+const isAuto = a => AUTO[a.type] || (a.type === 'stock' && a.us && S.finnhubKey);
 let NEWTYPE = 'gold';
 
 function fAdd() {
@@ -244,7 +245,9 @@ function fAdd() {
   if (T === 'cash') f = `<label>Ad</label><input id="a-name" placeholder="Örn. Vadesiz hesap"><div class="grid"><div><label>Tutar</label><input id="a-qty" inputmode="decimal" placeholder="0"></div><div><label>Para birimi</label>${curS}</div></div>`;
   else if (T === 'gold' || T === 'silver') f = `<label>Miktar (gram)</label><input id="a-qty" inputmode="decimal" placeholder="0">`;
   else if (T === 'crypto') f = `<label>Coin</label><select id="a-coin">${COINS.map(([id, n]) => `<option value="${id}">${n}</option>`).join('')}</select><label>Adet</label><input id="a-qty" inputmode="decimal" placeholder="0">`;
-  else if (T === 'stock') f = `<label>Sembol / ad</label><input id="a-name" placeholder="Örn. THYAO"><div class="grid"><div><label>Adet</label><input id="a-qty" inputmode="decimal" placeholder="0"></div><div><label>Birim fiyat</label><input id="a-price" inputmode="decimal" placeholder="0"></div></div><label>Para birimi</label>${curS}`;
+  else if (T === 'stock') f = `<label>Sembol</label><input id="a-name" placeholder="AAPL, THYAO…" autocapitalize="characters">
+    <label>Piyasa</label><select id="a-mkt"><option value="us">ABD (fiyat otomatik, dolar)</option><option value="man">BIST / diğer (fiyatı elle gir)</option></select>
+    <div class="grid"><div><label>Adet</label><input id="a-qty" inputmode="decimal" placeholder="0"></div><div><label>Birim fiyat (elle girilecekse)</label><input id="a-price" inputmode="decimal" placeholder="0"></div></div><label>Para birimi (elle girilen fiyat için)</label>${curS}`;
   else f = `<label>Ad</label><input id="a-name" placeholder="Örn. Araba"><div class="grid"><div><label>Değer</label><input id="a-price" inputmode="decimal" placeholder="0"></div><div><label>Para birimi</label>${curS}</div></div>`;
   return `<div class="card"><h3>Varlık ekle</h3><label>Tür</label><select id="a-type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${k === T ? 'selected' : ''}>${v}</option>`).join('')}</select>${f}<button class="full" data-act="addAsset">Ekle</button></div>`;
 }
@@ -260,9 +263,9 @@ function vVarlik() {
   const row = a => {
     const cs = `<select data-asset="${a.id}" data-field="cur">${CURS.map(c => `<option ${c === a.cur ? 'selected' : ''}>${c}</option>`).join('')}</select>`;
     const q = `<div><label>${unit[a.type]}</label><input inputmode="decimal" data-asset="${a.id}" data-field="qty" value="${raw(a.qty)}"></div>`;
-    const p = `<div><label>${a.type === 'other' ? 'Değer' : 'Birim fiyat'}${AUTO[a.type] ? ' (₺, otomatik)' : ''}</label><input inputmode="decimal" data-asset="${a.id}" data-field="price" value="${raw(a.price)}"></div>`;
+    const p = `<div><label>${a.type === 'other' ? 'Değer' : 'Birim fiyat'}${isAuto(a) ? ` (${SYM[a.cur]}, otomatik)` : ''}</label><input inputmode="decimal" data-asset="${a.id}" data-field="price" value="${raw(a.price)}"></div>`;
     const c = `<div><label>Para birimi</label>${cs}</div>`;
-    const fields = a.type === 'cash' ? q + c : a.type === 'other' ? p + c : AUTO[a.type] ? q + p : q + p + `<div style="grid-column:span 2">${c}</div>`;
+    const fields = a.type === 'cash' ? q + c : a.type === 'other' ? p + c : isAuto(a) ? q + p : q + p + `<div style="grid-column:span 2">${c}</div>`;
     return `<div class="card"><div class="row"><div><b>${esc(a.name)}</b><br><small class="muted">${TYPES[a.type]}${a.at ? ' · fiyat ' + a.at.split('-').reverse().join('.') : ''}</small></div>
       <button class="icon" data-act="delAsset" data-id="${a.id}">🗑</button></div>
       <div class="grid">${fields}</div>
@@ -281,7 +284,10 @@ function vVarlik() {
     <div style="margin-bottom:8px"><div class="row"><span>${TYPES[t]}</span><b>${fmt(v)} · %${Math.round(v / total * 100)}</b></div>
     <div class="bar"><i style="width:${v / total * 100}%"></i></div></div>`).join('')}</div>` : ''}
   <div class="card"><button class="ghost" style="width:100%" data-act="refreshAll">Fiyatları güncelle</button>
-    <div class="muted" style="margin-top:6px">${S.pricesAt ? 'Son güncelleme: ' + S.pricesAt.split('-').reverse().join('.') + '. ' : ''}Altın, gümüş ve kripto fiyatı otomatik gelir. Hisse ve diğer varlıkların fiyatını sen girersin.</div></div>
+    <div class="muted" style="margin-top:6px">${S.pricesAt ? 'Son güncelleme: ' + S.pricesAt.split('-').reverse().join('.') + '. ' : ''}Altın, gümüş ve kripto fiyatı otomatik gelir. ABD hisseleri aşağıdaki Finnhub anahtarıyla gelir. BIST ve diğer varlıkların fiyatını sen girersin.</div></div>
+  <div class="card"><h3>ABD hisseleri için Finnhub anahtarı</h3>
+    <input data-key="finnhub" value="${esc(S.finnhubKey || '')}" placeholder="API anahtarı" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <div class="muted" style="margin-top:6px">finnhub.io'dan ücretsiz alınır. Anahtar sadece bu telefonda saklanır, yedek dosyasına yazılmaz.</div></div>
   ${S.assets.map(row).join('')}
   ${fAdd()}`;
 }
@@ -372,7 +378,7 @@ document.addEventListener('click', e => {
     }
   }
   else if (a === 'export') {
-    const url = URL.createObjectURL(new Blob([JSON.stringify(S)], { type: 'application/json' }));
+    const url = URL.createObjectURL(new Blob([JSON.stringify({ ...S, finnhubKey: '' })], { type: 'application/json' }));
     const l = document.createElement('a'); l.href = url; l.download = 'butce-yedek-' + today() + '.json'; l.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
@@ -384,10 +390,13 @@ document.addEventListener('click', e => {
     else if (T === 'gold' || T === 'silver') { x.name = T === 'gold' ? 'Altın' : 'Gümüş'; x.cur = 'TRY'; }
     else if (T === 'crypto') { const s = $('#a-coin'); x.sym = s.value; x.name = s.options[s.selectedIndex].text; x.cur = 'TRY'; }
     else if (T === 'other') { x.qty = 1; x.name = x.name || 'Diğer'; }
-    else x.name = x.name || 'Hisse';
+    else {
+      x.name = (x.name || 'Hisse').toUpperCase(); x.sym = x.name;
+      x.us = v('a-mkt') === 'us'; if (x.us) x.cur = 'USD';
+    }
     if (T === 'other' ? !x.price : !x.qty) { ($('#a-qty') || $('#a-price')).focus(); return; }
     S.assets.push(x); persist(); render();
-    if (AUTO[T]) fetchPrices().then(() => render());
+    if (AUTO[T] || x.us) fetchPrices().then(() => render());
   }
   else if (a === 'delAsset') { S.assets = S.assets.filter(x => x.id !== b.dataset.id); persist(); render(); }
   else if (a === 'refreshAll') {
@@ -408,7 +417,7 @@ document.addEventListener('change', e => {
       try {
         const d = JSON.parse(r.result);
         if (!d.months || !d.cards) throw 0;
-        if (confirm('Mevcut veriler yedekle değiştirilsin mi?')) { S = Object.assign(def(), d); persist(); render(); }
+        if (confirm('Mevcut veriler yedekle değiştirilsin mi?')) { const k = S.finnhubKey; S = Object.assign(def(), d); S.finnhubKey = k; persist(); render(); }
       } catch (_) { alert('Geçersiz yedek dosyası.'); }
     };
     r.readAsText(t.files[0]); return;
@@ -417,6 +426,7 @@ document.addEventListener('change', e => {
   else if (t.dataset.cur) { S.cur[t.dataset.cur] = t.value; persist(); render(); }
   else if (t.dataset.rate) { S.rates[t.dataset.rate] = num(t.value); persist(); render(); }
   else if (t.id === 'a-type') { NEWTYPE = t.value; render(); }
+  else if (t.dataset.key) { S.finnhubKey = t.value.trim(); persist(); render(); }
   else if (t.dataset.asset) {
     const a = S.assets.find(x => x.id === t.dataset.asset), f = t.dataset.field;
     a[f] = f === 'cur' ? t.value : num(t.value); persist(); render();
@@ -461,6 +471,18 @@ async function fetchPrices() {
       const d = await j('https://api.coingecko.com/api/v3/simple/price?vs_currencies=try&ids=' + [...new Set(coins.map(a => a.sym))].join(','));
       coins.forEach(a => { if (d[a.sym] && d[a.sym].try) { a.price = d[a.sym].try; a.cur = 'TRY'; a.at = today(); } });
     } catch (e) { errs.push('kripto'); }
+  }
+  const stocks = S.assets.filter(a => a.type === 'stock' && a.us);
+  if (stocks.length && S.finnhubKey) {
+    const bad = [];
+    await Promise.all([...new Set(stocks.map(a => a.sym))].map(async sym => {
+      try {
+        const d = await j('https://finnhub.io/api/v1/quote?symbol=' + encodeURIComponent(sym) + '&token=' + encodeURIComponent(S.finnhubKey));
+        if (!d.c) throw 0; // geçersiz sembol 0 döner
+        stocks.filter(a => a.sym === sym).forEach(a => { a.price = d.c; a.cur = 'USD'; a.at = today(); });
+      } catch (e) { bad.push(sym); }
+    }));
+    if (bad.length) errs.push('hisse: ' + bad.join(', ') + ' (anahtarı/sembolü kontrol et)');
   }
   S.pricesAt = today(); persist();
   return errs;
