@@ -168,8 +168,13 @@ function goalInfo() {
   const n = diff(now, g.month) + 1;
   const need = Math.max(0, g.amount * gr - goalHave());
   if (n < 1) return { expired: true, need };
-  return { n, need, per: need / n };
+  // Birikim aylara sabit bölünmez: her ay kendi maaşıyla orantılı pay ayırır (maaşı yüksek ay daha çok biriktirir).
+  const rows = Array.from({ length: n }, (_, i) => { const m = shift(now, i); return { m, sal: salaryFor(m) }; });
+  const tot = rows.reduce((s, r) => s + r.sal, 0);
+  rows.forEach(r => { r.save = tot > 0 ? need * r.sal / tot : 0; r.cap = r.sal - r.save; });
+  return { n, need, rows, tot, ok: need <= tot + 1e-6, per: need / n };
 }
+const goalRow = (gi, m) => gi && gi.rows ? gi.rows.find(r => r.m === m) : null;
 
 let M = ymNow(), TAB = 'ozet';
 
@@ -184,11 +189,14 @@ function vOzet() {
     ? `<div class="card"><h3>Ay kapandı</h3><div>${fmt(cl.amt)} varlıklara nakit olarak eklendi.</div><button class="ghost full" data-act="undoClose">Kapanışı geri al</button></div>`
     : `<div class="card"><h3>Ay sonu</h3><div class="muted">Kalan nakit (${fmt(rem)}) Varlığım'a "Aylık artan nakit" olarak eklenir. Sonraki ay maaşla sıfırdan başlar.</div><button class="full" data-act="closeMonth">Ayı kapat</button></div>`;
   let goalBlock = '';
-  if (gi && !gi.expired) {
-    const cap = salaryFor(M) - gi.per;
+  const gr_ = goalRow(gi, M);
+  if (gi && !gi.expired && !gr_) {
+    goalBlock = `<div class="card"><h3>Hedefe göre harcama limiti</h3><div class="muted">${label(M)} hedef dönemi (${label(ymNow())} – ${label(gi.rows[gi.rows.length - 1].m)}) dışında.</div></div>`;
+  } else if (gi && !gi.expired) {
+    const cap = gr_.cap;
     const pct = cap > 0 ? Math.min(100, sp / cap * 100) : 100;
     goalBlock = `<div class="card"><h3>Hedefe göre harcama limiti</h3>
-      <div class="row"><b>${cap > 0 ? fmt(cap) : '—'}</b><span class="muted">${fmt(gi.per)} / ay birikim</span></div>
+      <div class="row"><b>${cap > 0 ? fmt(cap) : '—'}</b><span class="muted">${fmt(gr_.save)} bu ay birikim</span></div>
       <div class="bar"><i class="${sp > cap ? 'over' : ''}" style="width:${pct}%"></i></div>
       <div class="muted">${cap <= 0 ? 'Bu maaşla hedefe ulaşılamıyor. Hedefi veya tarihi gözden geçir.'
         : sp > cap ? `<span class="neg">Limiti ${fmt(sp - cap)} aştın.</span>` : `<span class="pos">${fmt(cap - sp)} harcama hakkın kaldı.</span>`}</div></div>`;
@@ -357,15 +365,15 @@ function vHedef() {
   let plan = '<div class="muted">Hedef tutarı ve tarihi gir.</div>';
   if (gi && gi.expired) plan = '<div class="neg">Hedef tarihi geçmiş.</div>';
   else if (gi) {
-    const cap = sal - gi.per;
     plan = `<div class="grid">
       <div class="stat"><small>Kalan miktar</small><b>${fmt(gi.need)}</b></div>
-      <div class="stat"><small>Kalan ay</small><b>${gi.n}</b></div>
-      <div class="stat"><small>Aylık birikim</small><b>${fmt(gi.per)}</b></div>
-      <div class="stat"><small>Aylık harcama limiti</small><b class="${cap < 0 ? 'neg' : 'pos'}">${fmt(cap)}</b></div></div>
-      ${cap < 0 ? '<div class="neg" style="margin-top:10px">Mevcut maaşla bu hedefe ulaşmak mümkün değil.</div>' : ''}`;
+      <div class="stat"><small>Kalan ay</small><b>${gi.n}</b></div></div>
+      ${gi.ok ? '' : `<div class="neg" style="margin-top:10px">Bu dönemdeki toplam maaşın (${fmt(gi.tot)}) hedef için yetmiyor. Eksik: ${fmt(gi.need - gi.tot)}</div>`}
+      <div class="muted" style="margin:10px 0 4px">Aylara göre (maaşa orantılı pay)</div>
+      <table style="width:100%;border-collapse:collapse;font-size:14px"><tr class="muted"><th align="left">Ay</th><th align="right">Maaş</th><th align="right">Birikim</th><th align="right">Harcama limiti</th></tr>
+      ${gi.rows.map(r => `<tr><td>${label(r.m)}</td><td align="right">${fmt(r.sal)}</td><td align="right">${fmt(r.save)}</td><td align="right" class="${r.cap < 0 ? 'neg' : 'pos'}"><b>${fmt(r.cap)}</b></td></tr>`).join('')}</table>`;
   }
-  const simDef = S.simSpend != null ? S.simSpend : (gi && !gi.expired ? Math.max(0, Math.round(sal - gi.per)) : 0);
+  const simDef = S.simSpend != null ? S.simSpend : (gi && !gi.expired ? Math.max(0, Math.round(gi.rows[0].cap)) : 0);
   return `<div class="card"><div class="row"><h3 style="margin:0">Birikim hedefi</h3><div style="width:110px">${curSel('goal')}</div></div>
     ${noRate('goal')}
     <label>Hedef tutar</label><input inputmode="decimal" data-goal="amount" value="${raw(g.amount)}" placeholder="0">
@@ -389,12 +397,14 @@ function sim() {
   const g = { amount: S.goal.amount * gr, saved: goalHave(), month: S.goal.month }; // TL karşılığı (varlıklar dahil)
   let h = `<div class="stat"><small>Aylık birikim</small><b class="${sv < 0 ? 'neg' : 'pos'}">${fmt(sv)}</b></div>`;
   if (gi && !gi.expired) {
-    const proj = g.saved + sv * gi.n;
+    const proj = g.saved + gi.tot - spend * gi.n; // her ayın kendi maaşıyla
     h += `<div class="stat" style="margin-top:8px"><small>${label(g.month)} sonunda birikim</small><b class="${proj >= g.amount ? 'pos' : 'neg'}">${fmt(proj)}</b></div>`;
     if (proj >= g.amount) h += `<div class="pos" style="margin-top:8px">Hedefe ulaşırsın, ${fmt(proj - g.amount)} fazlasıyla.</div>`;
     else {
       h += `<div class="neg" style="margin-top:8px">Hedefin ${fmt(g.amount - proj)} altında kalırsın.</div>`;
-      if (sv > 0) { const k = Math.ceil(gi.need / sv); h += `<div class="muted">Bu tempoda hedefe ${label(shift(now, k - 1))} ayında ulaşırsın.</div>`; }
+      let acc = g.saved, k = 0;
+      while (acc < g.amount && k < 600) { acc += salaryFor(shift(now, k)) - spend; k++; if (k > gi.n && sv <= 0) break; }
+      if (acc >= g.amount) h += `<div class="muted">Bu tempoda hedefe ${label(shift(now, k - 1))} ayında ulaşırsın.</div>`;
     }
   } else {
     h += `<div class="muted" style="margin-top:8px">6 ay sonra: <b>${fmt(g.saved + sv * 6)}</b> · 12 ay sonra: <b>${fmt(g.saved + sv * 12)}</b></div>`;
