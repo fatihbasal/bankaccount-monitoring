@@ -142,13 +142,17 @@ function cardDebt(c) {
   for (const p of S.payments) if (p.cardId === c.id) d -= p.amt;
   return d;
 }
+const assetsTotal = () => S.assets.reduce((s, a) => s + assetVal(a), 0);
+const goalUsesAssets = () => S.goal.useAssets !== false;
+// Hedefe ulaşmak için eldeki para (TL): elle girilen birikim + (açıksa) varlıkların toplamı.
+const goalHave = () => S.goal.saved * rateOf(S.cur.goal) + (goalUsesAssets() ? assetsTotal() : 0);
 function goalInfo() {
   const g = S.goal;
   const gr = rateOf(S.cur.goal);
   if (!g.amount || !g.month || !gr) return null;
   const now = ymNow();
   const n = diff(now, g.month) + 1;
-  const need = Math.max(0, (g.amount - g.saved) * gr);
+  const need = Math.max(0, g.amount * gr - goalHave());
   if (n < 1) return { expired: true, need };
   return { n, need, per: need / n };
 }
@@ -352,7 +356,9 @@ function vHedef() {
     ${noRate('goal')}
     <label>Hedef tutar</label><input inputmode="decimal" data-goal="amount" value="${raw(g.amount)}" placeholder="0">
     <label>Hedef ay</label><input type="month" data-goal="month" value="${g.month}">
-    <label>Şu ana kadar biriken</label><input inputmode="decimal" data-goal="saved" value="${raw(g.saved)}" placeholder="0">
+    <label>Şu ana kadar biriken (varlıklar dışında)</label><input inputmode="decimal" data-goal="saved" value="${raw(g.saved)}" placeholder="0">
+    <label class="row" style="margin-top:12px"><span>Varlıklarımı da say (${fmt(assetsTotal())})</span><input type="checkbox" data-goal="useAssets" ${goalUsesAssets() ? 'checked' : ''} style="width:auto"></label>
+    <div class="muted" style="margin-top:6px">Eldeki para: <b>${fmt(goalHave())}</b></div>
   </div>
   <div class="card"><h3>Plan</h3>${plan}
     <div class="muted" style="margin-top:8px">Hesapta ${label(now)} maaşın: ${fmt(sal)}</div></div>
@@ -366,7 +372,7 @@ function sim() {
   const spend = num($('#simin').value);
   S.simSpend = spend; persist();
   const now = ymNow(), sal = salaryFor(now), sv = sal - spend, gi = goalInfo(), gr = rateOf(S.cur.goal);
-  const g = { amount: S.goal.amount * gr, saved: S.goal.saved * gr, month: S.goal.month }; // TL karşılığı
+  const g = { amount: S.goal.amount * gr, saved: goalHave(), month: S.goal.month }; // TL karşılığı (varlıklar dahil)
   let h = `<div class="stat"><small>Aylık birikim</small><b class="${sv < 0 ? 'neg' : 'pos'}">${fmt(sv)}</b></div>`;
   if (gi && !gi.expired) {
     const proj = g.saved + sv * gi.n;
@@ -516,7 +522,7 @@ document.addEventListener('change', e => {
   }
   else if (t.dataset.goal) {
     const f = t.dataset.goal;
-    S.goal[f] = f === 'month' ? t.value : num(t.value); persist(); render();
+    S.goal[f] = f === 'month' ? t.value : f === 'useAssets' ? t.checked : num(t.value); persist(); render();
   }
 });
 
