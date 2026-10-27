@@ -434,6 +434,7 @@ document.addEventListener('click', e => {
   }
   else if (a === 'delExp') {
     const m = ensureM(M), ex = m.expenses.find(x => x.id === b.dataset.id);
+    if (!confirm('Bu harcama silinsin mi?')) return;
     if (ex && ex.assetId) { const ast = S.assets.find(x => x.id === ex.assetId); if (ast) ast.qty += ex.assetQty; }
     m.expenses = m.expenses.filter(x => x.id !== b.dataset.id); persist(); render();
   }
@@ -483,7 +484,7 @@ document.addEventListener('click', e => {
   }
   else if (a === 'delPay') {
     const p = S.payments.find(x => x.id === b.dataset.id);
-    if (p) { const ast = S.assets.find(x => x.id === p.src); if (ast) ast.qty += p.qty; S.payments = S.payments.filter(x => x !== p); persist(); render(); }
+    if (p && confirm('Bu ödeme silinsin mi? Borç geri yazılır, ödenen yer iade edilir.')) { const ast = S.assets.find(x => x.id === p.src); if (ast) ast.qty += p.qty; S.payments = S.payments.filter(x => x !== p); persist(); render(); }
   }
   else if (a === 'closeMonth') {
     const amt = Math.round(remaining(M) * 100) / 100;
@@ -497,7 +498,10 @@ document.addEventListener('click', e => {
     if (cl) { const ast = S.assets.find(x => x.id === cl.assetId); if (ast) ast.qty -= cl.amt; delete m.closed; persist(); render(); }
   }
   else if (a === 'goMonth') { M = b.dataset.m; render(); }
-  else if (a === 'delAsset') { S.assets = S.assets.filter(x => x.id !== b.dataset.id); persist(); render(); }
+  else if (a === 'delAsset') {
+    const ast = S.assets.find(x => x.id === b.dataset.id);
+    if (!confirm((ast ? '"' + ast.name + '"' : 'Bu varlık') + ' silinsin mi?')) return;
+    S.assets =S.assets.filter(x => x.id !== b.dataset.id); persist(); render(); }
   else if (a === 'refreshAll') {
     b.disabled = true; b.textContent = 'Alınıyor…';
     refreshAll().then(errs => { render(); if (errs.length) alert('Alınamadı: ' + errs.join(', ') + '. Fiyatı elle girebilirsin.'); });
