@@ -386,29 +386,35 @@ function vHedef() {
     <div class="muted" style="margin-top:8px">Hesapta ${label(now)} maaşın: ${fmt(sal)}</div></div>
   <div class="card"><h3>Ya şu kadar harcarsam?</h3>
     <label>Aylık harcama</label><input id="simin" inputmode="decimal" value="${raw(simDef)}">
+    <label>Kaç ay sonrasına bakılsın</label><input id="simn" inputmode="numeric" value="${S.simMonths || (gi && !gi.expired ? gi.n : 12)}">
     <div id="simout" style="margin-top:12px"></div></div>`;
 }
 
 function sim() {
   const out = $('#simout'); if (!out) return;
   const spend = num($('#simin').value);
-  S.simSpend = spend; persist();
-  const now = ymNow(), sal = salaryFor(now), sv = sal - spend, gi = goalInfo(), gr = rateOf(S.cur.goal);
-  const g = { amount: S.goal.amount * gr, saved: goalHave(), month: S.goal.month }; // TL karşılığı (varlıklar dahil)
-  let h = `<div class="stat"><small>Aylık birikim</small><b class="${sv < 0 ? 'neg' : 'pos'}">${fmt(sv)}</b></div>`;
-  if (gi && !gi.expired) {
-    const proj = g.saved + gi.tot - spend * gi.n; // her ayın kendi maaşıyla
-    h += `<div class="stat" style="margin-top:8px"><small>${label(g.month)} sonunda birikim</small><b class="${proj >= g.amount ? 'pos' : 'neg'}">${fmt(proj)}</b></div>`;
-    if (proj >= g.amount) h += `<div class="pos" style="margin-top:8px">Hedefe ulaşırsın, ${fmt(proj - g.amount)} fazlasıyla.</div>`;
-    else {
-      h += `<div class="neg" style="margin-top:8px">Hedefin ${fmt(g.amount - proj)} altında kalırsın.</div>`;
-      let acc = g.saved, k = 0;
-      while (acc < g.amount && k < 600) { acc += salaryFor(shift(now, k)) - spend; k++; if (k > gi.n && sv <= 0) break; }
-      if (acc >= g.amount) h += `<div class="muted">Bu tempoda hedefe ${label(shift(now, k - 1))} ayında ulaşırsın.</div>`;
-    }
-  } else {
-    h += `<div class="muted" style="margin-top:8px">6 ay sonra: <b>${fmt(g.saved + sv * 6)}</b> · 12 ay sonra: <b>${fmt(g.saved + sv * 12)}</b></div>`;
+  const N = Math.min(120, Math.max(1, Math.round(num($('#simn').value)) || 1));
+  S.simSpend = spend; S.simMonths = N; persist();
+  const now = ymNow(), gr = rateOf(S.cur.goal);
+  const target = S.goal.amount * gr;
+  let acc = goalHave(), reached = null, rows = '';
+  for (let i = 0; i < N; i++) {
+    const m = shift(now, i), sal = salaryFor(m), sv = sal - spend;
+    acc += sv;
+    if (target && reached == null && acc >= target) reached = m;
+    rows += `<tr><td>${label(m)}</td><td align="right">${fmt(sal)}</td><td align="right" class="${sv < 0 ? 'neg' : 'pos'}">${fmt(sv)}</td><td align="right"><b>${fmt(acc)}</b></td></tr>`;
   }
+  let h = `<div class="stat"><small>${label(shift(now, N - 1))} sonunda (${N} ay) birikim</small><b class="${target && acc < target ? 'neg' : 'pos'}">${fmt(acc)}</b></div>`;
+  if (target) {
+    if (reached) h += `<div class="pos" style="margin-top:8px">Hedefe <b>${label(reached)}</b> ayında ulaşırsın.</div>`;
+    else {
+      let a2 = acc, k = N;
+      while (k < 600 && a2 < target) { a2 += salaryFor(shift(now, k)) - spend; k++; }
+      h += `<div class="neg" style="margin-top:8px">${N} ayda hedefin ${fmt(target - acc)} altında kalırsın.</div>` + (a2 >= target ? `<div class="muted">Bu tempoda hedefe ${label(shift(now, k - 1))} ayında ulaşırsın.</div>` : '<div class="muted">Bu harcamayla hedefe ulaşılamıyor.</div>');
+    }
+  }
+  h += `<div class="muted" style="margin:10px 0 4px">Eldeki para (${fmt(goalHave())}) üzerine her ayın kendi maaşıyla</div>
+    <table style="width:100%;border-collapse:collapse;font-size:14px"><tr class="muted"><th align="left">Ay</th><th align="right">Maaş</th><th align="right">Kalan</th><th align="right">Birikim</th></tr>${rows}</table>`;
   out.innerHTML = h;
 }
 
@@ -559,7 +565,7 @@ document.addEventListener('change', e => {
   }
 });
 
-document.addEventListener('input', e => { if (e.target.id === 'simin') sim(); });
+document.addEventListener('input', e => { if (e.target.id === 'simin' || e.target.id === 'simn') sim(); });
 
 function fetchRates() {
   return Promise.all(['USD', 'EUR'].map(c => fetch('https://open.er-api.com/v6/latest/' + c).then(r => r.json()).then(j => {
